@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hotel Voice Agent - Phone Dialer</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 40px; background: #f5f5f5; }
+        .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
+        h1 { color: #2c3e50; }
+        .number-display { font-size: 32px; padding: 20px; background: #e9ecef; border-radius: 8px; margin: 20px 0; }
+        .call-btn { padding: 15px 40px; font-size: 18px; border: none; border-radius: 8px; cursor: pointer; margin: 10px; }
+        .call-btn { background: #28a745; color: white; }
+        .call-btn:hover { background: #218838; }
+        .call-btn:disabled { background: #6c757d; cursor: not-allowed; }
+        .hangup-btn { background: #dc3545; color: white; }
+        .hangup-btn:hover { background: #c82333; }
+        .status { margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 8px; }
+        .error { background: #f8d7da; color: #721c24; display: none; }
+        .info { background: #d4edda; color: #155724; display: none; }
+        .phone-input { padding: 12px; font-size: 16px; border: 1px solid #ced4da; border-radius: 4px; width: 200px; margin: 10px; }
+        .hint { font-size: 14px; color: #6c757d; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📞 Hotel Voice Agent</h1>
+        <p>Call the AI concierge from your browser!</p>
+        
+        <div>
+            <input type="text" id="phoneInput" class="phone-input" placeholder="+1XXXXXXXXXX" value="+17372508034">
+            <br>
+            <button id="callBtn" class="call-btn">📞 Call</button>
+            <button id="hangupBtn" class="hangup-btn" disabled>⏹ Hang Up</button>
+        </div>
+        
+        <div class="hint">Enter your Twilio phone number (e.g., +17372508034)</div>
+        <div class="number-display" id="statusDisplay">Ready</div>
+        <div class="status error" id="errorMsg"></div>
+        <div class="status info" id="infoMsg"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@twilio/voice-sdk@2.13.0/dist/twilio.min.js"></script>
+    <script>
+        let device = null;
+        let connection = null;
+        let isCallActive = false;
+        
+        const callBtn = document.getElementById('callBtn');
+        const hangupBtn = document.getElementById('hangupBtn');
+        const statusDisplay = document.getElementById('statusDisplay');
+        const errorMsg = document.getElementById('errorMsg');
+        const infoMsg = document.getElementById('infoMsg');
+        const phoneInput = document.getElementById('phoneInput');
+        
+        function showError(msg) {
+            errorMsg.textContent = '❌ ' + msg;
+            errorMsg.style.display = 'block';
+            setTimeout(() => { errorMsg.style.display = 'none'; }, 5000);
+        }
+        
+        function showInfo(msg) {
+            infoMsg.textContent = '✅ ' + msg;
+            infoMsg.style.display = 'block';
+            setTimeout(() => { infoMsg.style.display = 'none'; }, 5000);
+        }
+        
+        function updateStatus(msg) {
+            statusDisplay.textContent = msg;
+            console.log('Status:', msg);
+        }
+        
+        async function initTwilio() {
+            updateStatus('Initializing...');
+            
+            try {
+                const response = await fetch('/dialer/token');
+                const data = await response.json();
+                
+                if (data.error) {
+                    showError('Token error: ' + data.error);
+                    return;
+                }
+                
+                device = new Twilio.Device(data.token, {
+                    logLevel: 1,
+                    codecPreferences: ['opus', 'pcmu'],
+                });
+                
+                device.on('registered', () => {
+                    updateStatus('✅ Ready to call');
+                    callBtn.disabled = false;
+                    showInfo('Device registered! Enter a number and click Call.');
+                });
+                
+                device.on('error', (error) => {
+                    console.error('Device error:', error);
+                    showError('Device error: ' + error.message);
+                    updateStatus('❌ Error');
+                });
+                
+                device.on('incoming', (call) => {
+                    call.reject();
+                });
+                
+                device.register();
+                
+            } catch (err) {
+                console.error('Init error:', err);
+                showError('Failed to initialize: ' + err.message);
+                updateStatus('❌ Connection failed');
+            }
+        }
+        
+        async function makeCall() {
+            if (!device) {
+                showError('Device not initialized');
+                return;
+            }
+            
+            let phoneNumber = phoneInput.value.trim();
+            if (!phoneNumber) {
+                showError('Please enter a phone number');
+                return;
+            }
+            
+            if (!phoneNumber.startsWith('+')) {
+                phoneNumber = '+1' + phoneNumber;
+            }
+            
+            updateStatus('📞 Calling ' + phoneNumber + '...');
+            callBtn.disabled = true;
+            
+            try {
+                connection = await device.connect({
+                    params: {
+                        To: phoneNumber
+                    }
+                });
+                
+                isCallActive = true;
+                hangupBtn.disabled = false;
+                callBtn.disabled = true;
+                updateStatus('🔴 Connected to ' + phoneNumber);
+                showInfo('Call connected! Speak to the AI concierge.');
+                
+                connection.on('disconnect', () => {
+                    isCallActive = false;
+                    hangupBtn.disabled = true;
+                    callBtn.disabled = false;
+                    updateStatus('✅ Call ended');
+                    showInfo('Call ended');
+                });
+                
+                connection.on('error', (error) => {
+                    console.error('Call error:', error);
+                    showError('Call error: ' + error.message);
+                    isCallActive = false;
+                    hangupBtn.disabled = true;
+                    callBtn.disabled = false;
+                    updateStatus('❌ Call failed');
+                });
+                
+            } catch (err) {
+                console.error('Call error:', err);
+                showError('Call failed: ' + err.message);
+                updateStatus('❌ Call failed');
+                callBtn.disabled = false;
+                hangupBtn.disabled = true;
+            }
+        }
+        
+        function hangUp() {
+            if (connection && isCallActive) {
+                connection.disconnect();
+                isCallActive = false;
+                hangupBtn.disabled = true;
+                callBtn.disabled = false;
+                updateStatus('⏹ Hanging up...');
+            }
+        }
+        
+        callBtn.addEventListener('click', makeCall);
+        hangupBtn.addEventListener('click', hangUp);
+        phoneInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                makeCall();
+            }
+        });
+        
+        document.addEventListener('DOMContentLoaded', initTwilio);
+    </script>
+</body>
+</html>
