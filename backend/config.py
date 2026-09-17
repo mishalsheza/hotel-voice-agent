@@ -8,7 +8,18 @@ class Config:
     DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
+    # Supabase's current key naming is SUPABASE_PUBLISHABLE_KEY (matches .env).
+    # Some code in this project (backend/database.py) references
+    # config.SUPABASE_PUBLISHABLE_KEY directly, while other code may still
+    # expect the older config.SUPABASE_KEY name -- so both are exposed here,
+    # pointing at the same underlying value, to avoid this breaking again
+    # depending on which attribute name a given file happens to use.
+    SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
+    SUPABASE_KEY = SUPABASE_PUBLISHABLE_KEY or os.getenv("SUPABASE_KEY", "")
+
+    CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY", "")
+
     # Twilio
     TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
     TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
@@ -17,10 +28,10 @@ class Config:
     TWILIO_API_KEY_SECRET = os.getenv("TWILIO_API_KEY_SECRET", "")
     TWILIO_TWIML_APP_SID = os.getenv("TWILIO_TWIML_APP_SID", "")
     NGROK_URL = os.getenv("NGROK_URL", "")
-    
+
     # Server
     PORT = int(os.getenv("PORT", 8080))
-    
+
     @classmethod
     def validate(cls):
         """Check if required config is present"""
@@ -32,6 +43,8 @@ class Config:
             print("⚠️ Supabase credentials not set - tickets will be in-memory only")
         else:
             print("✅ Supabase configured")
+        if not cls.CARTESIA_API_KEY:
+            print("⚠️ CARTESIA_API_KEY not set - TTS will be unavailable")
         if not cls.TWILIO_ACCOUNT_SID or not cls.TWILIO_API_KEY_SID:
             print("⚠️ Twilio credentials not fully set - browser test dialer will fail")
         else:
