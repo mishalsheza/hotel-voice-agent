@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
 from fastapi import Request
 from backend.frontend import HTML_PAGE
 from backend.database import db
+from pydantic import BaseModel
 from backend.websocket_handler import WebSocketHandler
 from backend.twilio_handler import TwilioCallHandler
 from backend.config import config
@@ -92,6 +93,23 @@ async def get_tickets():
         "total": len(tickets),
         "tickets": tickets
     })
+
+class TicketStatusUpdate(BaseModel):
+    status: str  # "open" | "assigned" | "in_progress" | "completed"
+
+@app.patch("/tickets/{ticket_id}/status")
+async def update_ticket_status(ticket_id: str, body: TicketStatusUpdate):
+    """Update a ticket's status (used by the tickets drawer in the dialer page)"""
+    valid_statuses = {"open", "assigned", "in_progress", "completed"}
+    if body.status not in valid_statuses:
+        return JSONResponse(
+            {"error": f"status must be one of {sorted(valid_statuses)}"},
+            status_code=400
+        )
+    updated = db.update_ticket(ticket_id, {"status": body.status})
+    if updated is None:
+        return JSONResponse({"error": "ticket not found"}, status_code=404)
+    return JSONResponse({"ticket": updated})
 
 @app.get("/tickets/text")
 async def get_tickets_text():
