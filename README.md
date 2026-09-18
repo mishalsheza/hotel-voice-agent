@@ -1,4 +1,4 @@
-# 🏨 Hotel Voice Agent
+#  Hotel Voice Agent
 
 An AI voice concierge that answers real phone calls for a hotel. Guests can call in and speak naturally — "I need towels in room 402" or "what's the Wi-Fi password?" — and the agent transcribes the request, understands intent, takes real action (creates a ticket, answers an FAQ, sets a wake-up call), and speaks a reply back, in real time.
 
