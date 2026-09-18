@@ -25,3 +25,12 @@ class TicketCreate(BaseModel):
 class WakeupCall(BaseModel):
     room: str
     time: str
+
+class Worker(BaseModel):
+    id: Optional[str] = None
+    name: str
+    status: str = "available"  # available | busy
+    created_at: Optional[datetime] = None
+ 
+class WorkerCreate(BaseModel):
+    name: str

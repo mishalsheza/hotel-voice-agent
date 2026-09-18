@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
 from fastapi import Request
 from backend.frontend import HTML_PAGE
 from backend.database import db
+from backend.models import WorkerCreate
 from pydantic import BaseModel
 from backend.websocket_handler import WebSocketHandler
 from backend.twilio_handler import TwilioCallHandler
@@ -106,10 +107,34 @@ async def update_ticket_status(ticket_id: str, body: TicketStatusUpdate):
             {"error": f"status must be one of {sorted(valid_statuses)}"},
             status_code=400
         )
-    updated = db.update_ticket(ticket_id, {"status": body.status})
+    if body.status == "completed":
+        # complete_ticket also frees the assigned worker and hands them
+        # the next open ticket, if any exist.
+        updated = db.complete_ticket(ticket_id)
+    else:
+        updated = db.update_ticket(ticket_id, {"status": body.status})
+
     if updated is None:
         return JSONResponse({"error": "ticket not found"}, status_code=404)
     return JSONResponse({"ticket": updated})
+
+# --- Workers ---
+class WorkerCreateBody(BaseModel):
+    name: str
+
+@app.get("/workers")
+async def get_workers():
+    workers = db.get_workers()
+    return JSONResponse({"total": len(workers), "workers": workers})
+
+@app.post("/workers")
+async def create_worker(body: WorkerCreateBody):
+    if not body.name.strip():
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    worker = db.create_worker(WorkerCreate(name=body.name.strip()))
+    if not worker:
+        return JSONResponse({"error": "failed to create worker"}, status_code=500)
+    return JSONResponse({"worker": worker})
 
 @app.get("/tickets/text")
 async def get_tickets_text():

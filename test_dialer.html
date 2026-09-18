@@ -18,6 +18,7 @@
     --green-bright: #4C7A5C;
     --red: #A63D40;
     --red-bright: #C24A4D;
+    --blue: #7fa8e0;
     --muted: #8C8477;
     --hairline: rgba(246, 241, 231, 0.12);
   }
@@ -176,9 +177,13 @@
     border-top: 1px solid var(--hairline);
   }
 
-  .tickets-btn {
-    width: 100%;
+  .secondary-row {
+    display: flex;
+    gap: 10px;
     margin-top: 14px;
+  }
+  .tickets-btn {
+    flex: 1;
     padding: 12px 16px;
     background: rgba(176,141,87,0.08);
     border: 1px solid var(--hairline);
@@ -190,8 +195,10 @@
     transition: background 0.2s, border-color 0.2s;
   }
   .tickets-btn:hover { background: rgba(176,141,87,0.14); border-color: var(--brass); }
+  .tickets-btn.workers-btn { color: var(--blue); }
+  .tickets-btn.workers-btn:hover { border-color: var(--blue); background: rgba(127,168,224,0.1); }
 
-  .tickets-drawer {
+  .drawer {
     position: fixed;
     top: 0;
     right: 0;
@@ -206,7 +213,7 @@
     overflow-y: auto;
     z-index: 10;
   }
-  .tickets-drawer.open { transform: translateX(0); }
+  .drawer.open { transform: translateX(0); }
 
   .drawer-header {
     display: flex;
@@ -293,11 +300,17 @@
     line-height: 1.4;
     margin-bottom: 8px;
   }
+  .ticket-card .assignee {
+    font-size: 11.5px;
+    color: var(--blue);
+    margin-bottom: 8px;
+  }
   .ticket-card .meta {
     display: flex;
     gap: 8px;
     font-size: 11px;
     align-items: center;
+    flex-wrap: wrap;
   }
   .pill {
     padding: 2px 8px;
@@ -309,7 +322,7 @@
   .pill.medium { color: var(--brass-bright); background: rgba(176,141,87,0.15); }
   .pill.low { color: var(--green-bright); background: rgba(59,93,72,0.15); }
   .pill.status-open { color: var(--brass-bright); background: rgba(176,141,87,0.15); }
-  .pill.status-in_progress, .pill.status-assigned { color: #7fa8e0; background: rgba(127,168,224,0.15); }
+  .pill.status-in_progress, .pill.status-assigned { color: var(--blue); background: rgba(127,168,224,0.15); }
   .pill.status-completed { color: var(--green-bright); background: rgba(59,93,72,0.15); }
 
   .complete-btn {
@@ -345,6 +358,61 @@
     z-index: 9;
   }
   .overlay.open { opacity: 1; pointer-events: auto; }
+
+  /* Workers drawer specifics */
+  .worker-form {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .worker-form input {
+    flex: 1;
+    padding: 10px 12px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    color: var(--ivory);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+  }
+  .worker-form input:focus { outline: none; border-color: var(--brass); }
+  .worker-form button {
+    padding: 10px 16px;
+    background: rgba(176,141,87,0.12);
+    border: 1px solid var(--brass);
+    border-radius: 8px;
+    color: var(--brass-bright);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .worker-form button:hover { background: rgba(176,141,87,0.2); }
+  .worker-form button:disabled { opacity: 0.5; cursor: default; }
+
+  .worker-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+  }
+  .worker-card .name {
+    font-size: 14px;
+    color: var(--ivory);
+  }
+  .worker-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+  }
+  .worker-status-dot.available { background: var(--green-bright); box-shadow: 0 0 6px rgba(76,122,92,0.7); }
+  .worker-status-dot.busy { background: var(--brass-bright); box-shadow: 0 0 6px rgba(201,168,118,0.6); }
 </style>
 </head>
 <body>
@@ -384,13 +452,17 @@
 
   <div class="messages" id="messages"></div>
 
-  <button class="tickets-btn" id="ticketsBtn">View tickets</button>
+  <div class="secondary-row">
+    <button class="tickets-btn" id="ticketsBtn">View tickets</button>
+    <button class="tickets-btn workers-btn" id="workersBtn">Workers</button>
+  </div>
 
   <p class="hint">Registered devices connect through your Twilio number and route to the AI concierge.</p>
 </div>
 
 <div class="overlay" id="overlay"></div>
-<div class="tickets-drawer" id="ticketsDrawer">
+
+<div class="drawer" id="ticketsDrawer">
   <div class="drawer-header">
     <h2>Tickets</h2>
     <button class="drawer-close" id="drawerClose">&times;</button>
@@ -403,6 +475,18 @@
     <button class="filter-chip" data-filter="completed">Completed</button>
   </div>
   <div id="ticketsList"></div>
+</div>
+
+<div class="drawer" id="workersDrawer">
+  <div class="drawer-header">
+    <h2>Workers</h2>
+    <button class="drawer-close" id="workersDrawerClose">&times;</button>
+  </div>
+  <div class="worker-form">
+    <input type="text" id="workerNameInput" placeholder="Worker name" maxlength="60">
+    <button id="addWorkerBtn">Add</button>
+  </div>
+  <div id="workersList"></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@twilio/voice-sdk@2.13.0/dist/twilio.min.js"></script>
@@ -545,10 +629,27 @@
 
   document.addEventListener('DOMContentLoaded', initTwilio);
 
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
+  // --- Overlay (shared between drawers) ---
+  const overlay = document.getElementById('overlay');
+  let activeDrawer = null; // 'tickets' | 'workers' | null
+
+  function closeAllDrawers() {
+    document.getElementById('ticketsDrawer').classList.remove('open');
+    document.getElementById('workersDrawer').classList.remove('open');
+    overlay.classList.remove('open');
+    activeDrawer = null;
+  }
+  overlay.addEventListener('click', closeAllDrawers);
+
   // --- Tickets drawer ---
   const ticketsBtn = document.getElementById('ticketsBtn');
   const ticketsDrawer = document.getElementById('ticketsDrawer');
-  const overlay = document.getElementById('overlay');
   const drawerClose = document.getElementById('drawerClose');
   const ticketsList = document.getElementById('ticketsList');
   const ticketCount = document.getElementById('ticketCount');
@@ -556,12 +657,6 @@
 
   let allTickets = [];
   let currentFilter = 'all';
-
-  function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str == null ? '' : String(str);
-    return div.innerHTML;
-  }
 
   function statusLabel(status) {
     return escapeHtml((status || 'open').replace('_', ' '));
@@ -595,6 +690,7 @@
       const status = (t.status || 'open').toLowerCase();
       const isCompleted = status === 'completed';
       const ticketId = escapeHtml(t.id != null ? t.id : '');
+      const assignee = t.assigned_worker_name ? escapeHtml(t.assigned_worker_name) : null;
 
       return `
         <div class="ticket-card ${isCompleted ? 'is-completed' : ''}">
@@ -603,6 +699,7 @@
             <span class="room">${room}</span>
           </div>
           ${desc ? `<div class="desc">${desc}</div>` : ''}
+          ${assignee && !isCompleted ? `<div class="assignee">→ Assigned to ${assignee}</div>` : ''}
           <div class="meta">
             <span class="pill ${priority}">${escapeHtml(priority)}</span>
             <span class="pill status-${status}">${statusLabel(status)}</span>
@@ -661,20 +758,92 @@
     renderTickets();
   });
 
-  function openDrawer() {
+  function openTicketsDrawer() {
     ticketsDrawer.classList.add('open');
     overlay.classList.add('open');
+    activeDrawer = 'tickets';
     loadTickets();
   }
 
-  function closeDrawer() {
-    ticketsDrawer.classList.remove('open');
-    overlay.classList.remove('open');
+  ticketsBtn.addEventListener('click', openTicketsDrawer);
+  drawerClose.addEventListener('click', closeAllDrawers);
+
+  // --- Workers drawer ---
+  const workersBtn = document.getElementById('workersBtn');
+  const workersDrawer = document.getElementById('workersDrawer');
+  const workersDrawerClose = document.getElementById('workersDrawerClose');
+  const workersList = document.getElementById('workersList');
+  const workerNameInput = document.getElementById('workerNameInput');
+  const addWorkerBtn = document.getElementById('addWorkerBtn');
+
+  function renderWorkers(workers) {
+    if (!workers || workers.length === 0) {
+      workersList.innerHTML = '<div class="drawer-empty">No workers added yet.</div>';
+      return;
+    }
+    workersList.innerHTML = workers.map(w => {
+      const status = (w.status || 'available').toLowerCase();
+      const name = escapeHtml(w.name || '');
+      return `
+        <div class="worker-card">
+          <span class="name"><span class="worker-status-dot ${status}"></span>${name}</span>
+          <span class="pill status-${status === 'busy' ? 'in_progress' : 'open'}">${escapeHtml(status)}</span>
+        </div>
+      `;
+    }).join('');
   }
 
-  ticketsBtn.addEventListener('click', openDrawer);
-  drawerClose.addEventListener('click', closeDrawer);
-  overlay.addEventListener('click', closeDrawer);
+  async function loadWorkers() {
+    workersList.innerHTML = '<div class="drawer-loading">Loading workers…</div>';
+    try {
+      const res = await fetch('/workers');
+      if (!res.ok) throw new Error('Server returned ' + res.status);
+      const data = await res.json();
+      renderWorkers(data.workers || []);
+    } catch (err) {
+      console.error('Failed to load workers:', err);
+      workersList.innerHTML = '<div class="drawer-error">Could not load workers. ' + escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  async function addWorker() {
+    const name = workerNameInput.value.trim();
+    if (!name) {
+      showMessage('Enter a worker name', 'err');
+      return;
+    }
+    addWorkerBtn.disabled = true;
+    try {
+      const res = await fetch('/workers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      if (!res.ok) throw new Error('Server returned ' + res.status);
+      workerNameInput.value = '';
+      await loadWorkers();
+    } catch (err) {
+      console.error('Failed to add worker:', err);
+      showMessage('Could not add worker.', 'err');
+    } finally {
+      addWorkerBtn.disabled = false;
+    }
+  }
+
+  addWorkerBtn.addEventListener('click', addWorker);
+  workerNameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addWorker();
+  });
+
+  function openWorkersDrawer() {
+    workersDrawer.classList.add('open');
+    overlay.classList.add('open');
+    activeDrawer = 'workers';
+    loadWorkers();
+  }
+
+  workersBtn.addEventListener('click', openWorkersDrawer);
+  workersDrawerClose.addEventListener('click', closeAllDrawers);
 </script>
 
 </body>
