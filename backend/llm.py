@@ -1,5 +1,6 @@
 import json
-from openai import OpenAI
+import re
+from openai import AsyncOpenAI
 from backend.config import config
 from backend.tools import TOOLS, SYSTEM_PROMPT
 
@@ -11,7 +12,7 @@ class LLMService:
         if self.use_fallback:
             print("⚠️ No Groq API key - using fallback keyword matching")
         else:
-            self.client = OpenAI(
+            self.client = AsyncOpenAI(
                 api_key=self.api_key,
                 base_url="https://api.groq.com/openai/v1",
             )
@@ -27,7 +28,7 @@ class LLMService:
                 messages.extend(history)
             messages.append({"role": "user", "content": transcript})
 
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model="openai/gpt-oss-120b",
                 messages=messages,
                 tools=TOOLS,
@@ -69,7 +70,6 @@ class LLMService:
 
     def _fallback_processing(self, transcript: str) -> dict:
         """Fallback keyword-based processing"""
-        import re
         normalized = re.sub(r"[^\w\s]", " ", transcript.lower())
         normalized = re.sub(r"\s+", " ", normalized).strip()
 
@@ -86,6 +86,8 @@ class LLMService:
             return result
 
         lower = transcript.lower()
+        # Word boundaries so "place", "back" or "snack" don't count as "ac"
+        mentions_ac = re.search(r"\bac\b|\ba c\b|\bair ?condition", normalized)
         if "towel" in lower:
             result["tool_calls"].append({
                 "name": "create_ticket",
@@ -98,7 +100,7 @@ class LLMService:
             result["response"] = "The Wi-Fi password is 'HotelGuest2024'"
         elif "checkout" in lower:
             result["response"] = "Checkout is at 11 AM. Late checkout available until 2 PM."
-        elif "ac" in lower or "air conditioning" in lower:
+        elif mentions_ac:
             result["tool_calls"].append({
                 "name": "create_ticket",
                 "arguments": {

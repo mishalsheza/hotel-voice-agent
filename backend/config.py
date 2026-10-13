@@ -9,14 +9,9 @@ class Config:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 
-    # Supabase's current key naming is SUPABASE_PUBLISHABLE_KEY (matches .env).
-    # Some code in this project (backend/database.py) references
-    # config.SUPABASE_PUBLISHABLE_KEY directly, while other code may still
-    # expect the older config.SUPABASE_KEY name -- so both are exposed here,
-    # pointing at the same underlying value, to avoid this breaking again
-    # depending on which attribute name a given file happens to use.
-    SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
-    SUPABASE_KEY = SUPABASE_PUBLISHABLE_KEY or os.getenv("SUPABASE_KEY", "")
+    # Code should only use config.SUPABASE_KEY. The env var SUPABASE_KEY wins;
+    # SUPABASE_PUBLISHABLE_KEY is accepted as a fallback for older .env files.
+    SUPABASE_KEY = os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
 
     CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY", "")
 
@@ -28,6 +23,14 @@ class Config:
     TWILIO_API_KEY_SECRET = os.getenv("TWILIO_API_KEY_SECRET", "")
     TWILIO_TWIML_APP_SID = os.getenv("TWILIO_TWIML_APP_SID", "")
     NGROK_URL = os.getenv("NGROK_URL", "")
+    # Reject Twilio webhooks without a valid X-Twilio-Signature. Only turn off for local testing.
+    TWILIO_VALIDATE_SIGNATURE = os.getenv("TWILIO_VALIDATE_SIGNATURE", "true").strip().lower() not in ("0", "false", "no", "off")
+
+    # Shared secret passed to /twilio-stream as a <Stream> <Parameter>; calls without it are dropped
+    STREAM_TOKEN = os.getenv("STREAM_TOKEN", "")
+
+    # Shared key protecting the admin/dashboard routes (/tickets, /workers, /dialer/token, /routes)
+    ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 
     # Server
     PORT = int(os.getenv("PORT", 8080))
@@ -49,5 +52,13 @@ class Config:
             print("⚠️ Twilio credentials not fully set - browser test dialer will fail")
         else:
             print("✅ Twilio configured")
+        if cls.TWILIO_VALIDATE_SIGNATURE and not cls.TWILIO_AUTH_TOKEN:
+            print("⚠️ TWILIO_AUTH_TOKEN not set - Twilio webhooks (/voice, /dialer/voice) will be rejected")
+        if not cls.TWILIO_VALIDATE_SIGNATURE:
+            print("⚠️ TWILIO_VALIDATE_SIGNATURE is off - Twilio webhooks are NOT authenticated")
+        if not cls.STREAM_TOKEN:
+            print("⚠️ STREAM_TOKEN not set - phone calls will be dropped at /twilio-stream")
+        if not cls.ADMIN_API_KEY:
+            print("⚠️ ADMIN_API_KEY not set - admin routes (/tickets, /workers, /dialer/token, /routes) will be rejected")
 
 config = Config()

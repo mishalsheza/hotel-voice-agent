@@ -502,6 +502,23 @@
   const messages = document.getElementById('messages');
   const phoneInput = document.getElementById('phoneInput');
 
+  // Admin routes need ADMIN_API_KEY: open this page as /dialer?key=YOUR_KEY
+  const ADMIN_API_KEY = new URLSearchParams(window.location.search).get('key') || '';
+  function apiFetch(url, options = {}) {
+    const headers = Object.assign({}, options.headers, { 'X-API-Key': ADMIN_API_KEY });
+    return fetch(url, Object.assign({}, options, { headers }));
+  }
+
+  // Turn a failed response into an Error carrying the server's {"error": ...} message
+  async function responseError(res) {
+    let message = 'Server returned ' + res.status;
+    try {
+      const body = await res.json();
+      if (body && (body.error || body.detail)) message = body.error || body.detail;
+    } catch (e) { /* not JSON */ }
+    return new Error(message);
+  }
+
   let msgTimeout = null;
   function showMessage(text, kind) {
     messages.textContent = text;
@@ -519,7 +536,12 @@
     setLamp('', 'Initializing…');
 
     try {
-      const response = await fetch('/dialer/token');
+      const response = await apiFetch('/dialer/token');
+      if (response.status === 401 || response.status === 503) {
+        setLamp('error', 'Not authorized');
+        showMessage('Open this page as /dialer?key=YOUR_ADMIN_API_KEY', 'err');
+        return;
+      }
       const data = await response.json();
 
       if (data.error) {
@@ -718,18 +740,18 @@
     btn.disabled = true;
     btn.textContent = '…';
     try {
-      const res = await fetch(`/tickets/${encodeURIComponent(id)}/status`, {
+      const res = await apiFetch(`/tickets/${encodeURIComponent(id)}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'completed' })
       });
-      if (!res.ok) throw new Error('Server returned ' + res.status);
+      if (!res.ok) throw await responseError(res);
       await loadTickets();
     } catch (err) {
       console.error('Failed to update ticket:', err);
       btn.disabled = false;
       btn.textContent = 'Mark done';
-      showMessage('Could not update that ticket.', 'err');
+      showMessage('Could not update that ticket: ' + err.message, 'err');
     }
   }
 
@@ -738,8 +760,8 @@
     ticketsList.innerHTML = '<div class="drawer-loading">Loading tickets…</div>';
 
     try {
-      const res = await fetch('/tickets');
-      if (!res.ok) throw new Error('Server returned ' + res.status);
+      const res = await apiFetch('/tickets');
+      if (!res.ok) throw await responseError(res);
       const data = await res.json();
       allTickets = data.tickets || [];
       renderTickets();
@@ -796,8 +818,8 @@
   async function loadWorkers() {
     workersList.innerHTML = '<div class="drawer-loading">Loading workers…</div>';
     try {
-      const res = await fetch('/workers');
-      if (!res.ok) throw new Error('Server returned ' + res.status);
+      const res = await apiFetch('/workers');
+      if (!res.ok) throw await responseError(res);
       const data = await res.json();
       renderWorkers(data.workers || []);
     } catch (err) {
@@ -814,12 +836,12 @@
     }
     addWorkerBtn.disabled = true;
     try {
-      const res = await fetch('/workers', {
+      const res = await apiFetch('/workers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name })
       });
-      if (!res.ok) throw new Error('Server returned ' + res.status);
+      if (!res.ok) throw await responseError(res);
       workerNameInput.value = '';
       await loadWorkers();
     } catch (err) {

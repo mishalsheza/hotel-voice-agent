@@ -54,12 +54,15 @@ Every external service (STT, LLM, TTS, DB) has a fallback — if a key is missin
 ```
 .
 ├── main.py                    # App entry point: routes, Twilio webhooks, WebSocket endpoints
-├── requirements.txt
-├── test_dialer.html            # Browser-based outgoing call dialer (for testing)
+├── requirements.txt            # requirements-dev.txt adds pytest
+├── test_dialer.html            # Browser-based outgoing call dialer (open as /dialer?key=ADMIN_API_KEY)
+├── tests/                      # pytest suite (no API keys or network needed)
 └── backend/
     ├── config.py               # Loads .env, central config
     ├── database.py             # Supabase client + in-memory fallback
-    ├── models.py                # Pydantic models (Ticket, TicketCreate, WakeupCall)
+    ├── models.py                # Pydantic models (TicketCreate, Worker, WorkerCreate)
+    ├── security.py              # Twilio signature check, admin API key, dial allow-list
+    ├── ticket_actions.py        # Tool actions shared by the phone and browser handlers
     ├── stt.py                   # Deepgram speech-to-text
     ├── tts.py                   # Cartesia text-to-speech (streaming)
     ├── llm.py                   # Groq LLM + tool-calling + fallback keyword matching
@@ -67,7 +70,6 @@ Every external service (STT, LLM, TTS, DB) has a fallback — if a key is missin
     ├── faq.py                   # Grounded FAQ knowledge base
     ├── twilio_handler.py        # Per-call state machine for real phone calls (VAD, turns)
     ├── websocket_handler.py     # Browser demo audio handler
-    ├── voice_dialer.py          # Browser-based outgoing call routes
     └── frontend.py               # HTML for the browser demo page
 ```
 
@@ -96,7 +98,7 @@ CARTESIA_VOICE_ID=          # optional, defaults to a preset voice
 
 # Database
 SUPABASE_URL=
-SUPABASE_KEY=
+SUPABASE_KEY=                # SUPABASE_PUBLISHABLE_KEY also accepted
 
 # Twilio (for real phone calls)
 TWILIO_ACCOUNT_SID=
@@ -106,11 +108,16 @@ TWILIO_API_KEY_SID=
 TWILIO_API_KEY_SECRET=
 TWILIO_TWIML_APP_SID=
 NGROK_URL=                   # your public tunnel URL, without https://
+TWILIO_VALIDATE_SIGNATURE=true   # set to false only for local testing
+STREAM_TOKEN=                # random secret; /voice passes it to /twilio-stream, calls without it are dropped
+
+# Protects /tickets, /workers, /dialer/token, /routes (X-API-Key header or ?key=)
+ADMIN_API_KEY=
 
 PORT=8080
 ```
 
-Every key is optional — missing keys just drop that service into a fallback/mock mode instead of failing.
+Service keys are optional — missing keys just drop that service into a fallback/mock mode instead of failing. Three exceptions fail closed: without `ADMIN_API_KEY` the admin routes return 503, without `TWILIO_AUTH_TOKEN` the Twilio webhooks are rejected (unless `TWILIO_VALIDATE_SIGNATURE=false`), and without `STREAM_TOKEN` phone calls are dropped at `/twilio-stream`.
 
 ### 3. Run the server
 
@@ -119,8 +126,15 @@ python main.py
 ```
 
 - Browser demo UI: `http://localhost:8080`
-- Browser dialer (place outgoing test calls): `http://localhost:8080/dialer`
-- View created tickets: `http://localhost:8080/tickets` (JSON) or `/tickets/text` (readable)
+- Browser dialer (place outgoing test calls): `http://localhost:8080/dialer?key=<ADMIN_API_KEY>`
+- View created tickets: `http://localhost:8080/tickets?key=<ADMIN_API_KEY>` (JSON) or `/tickets/text?key=...` (readable)
+
+### Run the tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
 
 ### 4. Enable real phone calls
 
@@ -149,7 +163,8 @@ Call the number — the agent will answer and start listening.
 
 - No true barge-in — the agent stops listening while it's speaking rather than letting the caller interrupt mid-sentence.
 - Voice activity detection is a simple RMS-threshold check, not a trained VAD model.
-- No authentication on the `/tickets` endpoints.
+- The admin routes use a single shared API key, not per-user auth. The browser demo (`/`, `/ws`) is unauthenticated.
+- **Single process only for worker assignment.** Auto-assigning tickets to workers is protected by an in-process lock, so it's only race-free with one server process. Running several uvicorn workers or instances could assign two workers to one ticket, or one worker to two tickets. A multi-worker deployment needs the assignment done as an atomic conditional update in Postgres, e.g. `UPDATE tickets SET status='in_progress', assigned_worker_id=$1 WHERE id=$2 AND status='open' AND assigned_worker_id IS NULL` (and the same for claiming the worker: `... WHERE id=$1 AND status='available'`), treating "0 rows updated" as "someone else got there first".
 
 ## License
 

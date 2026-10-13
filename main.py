@@ -1,16 +1,25 @@
 import os
 import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import html
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
 from fastapi import Request
 from backend.frontend import HTML_PAGE
-from backend.database import db
+from backend.database import db, DatabaseUnavailable
 from backend.models import WorkerCreate
 from pydantic import BaseModel
 from backend.websocket_handler import WebSocketHandler
 from backend.twilio_handler import TwilioCallHandler
 from backend.config import config
-from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
+from backend.security import (
+    public_host,
+    verify_twilio_signature,
+    require_admin_key,
+    is_allowed_dial_target,
+)
+from backend.stt import stt
+from twilio.twiml.voice_response import VoiceResponse, Connect, Dial
 from twilio.jwt.access_token import AccessToken
 from twilio.jwt.access_token.grants import VoiceGrant
 
@@ -18,7 +27,21 @@ from twilio.jwt.access_token.grants import VoiceGrant
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DIALER_HTML_PATH = os.path.join(BASE_DIR, "test_dialer.html")
 
-app = FastAPI(title="Hotel Voice Agent")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    config.validate()  # log missing keys loudly once, at startup
+    yield
+    await stt.aclose()
+
+app = FastAPI(title="Hotel Voice Agent", lifespan=lifespan)
+
+admin_only = [Depends(require_admin_key)]
+twilio_only = [Depends(verify_twilio_signature)]
+
+@app.exception_handler(DatabaseUnavailable)
+async def database_unavailable_handler(request: Request, exc: DatabaseUnavailable):
+    # Don't present a Supabase outage as "no tickets"/"no workers"
+    return JSONResponse({"error": "database unavailable"}, status_code=503)
 
 # --- Simple Dialer Page (Direct Route) ---
 @app.get("/dialer")
@@ -32,7 +55,7 @@ async def dialer_page():
     return FileResponse(DIALER_HTML_PATH)
 
 # --- Dialer Token Endpoint ---
-@app.get("/dialer/token")
+@app.get("/dialer/token", dependencies=admin_only)
 async def get_token():
     account_sid = config.TWILIO_ACCOUNT_SID
     api_key_sid = config.TWILIO_API_KEY_SID
@@ -62,16 +85,20 @@ async def get_token():
     })
 
 # --- Dialer Voice Webhook ---
-@app.post("/dialer/voice")
+@app.post("/dialer/voice", dependencies=twilio_only)
 async def handle_dialer_voice(request: Request):
-    from twilio.twiml.voice_response import VoiceResponse, Dial
-    
     form = await request.form()
-    to_number = form.get('To', config.TWILIO_PHONE_NUMBER)
-    
-    print(f"📞 Dialer: Outgoing call to {to_number}")
-    
+    to_number = form.get('To') or config.TWILIO_PHONE_NUMBER
+
     response = VoiceResponse()
+    if not is_allowed_dial_target(to_number):
+        print(f"🚫 Dialer: refused outgoing call to {to_number} (only the hotel number is allowed)")
+        response.say("Sorry, this dialer can only call the hotel.")
+        response.hangup()
+        return Response(content=str(response), media_type="application/xml")
+
+    print(f"📞 Dialer: Outgoing call to {to_number}")
+
     dial = Dial(
         caller_id=config.TWILIO_PHONE_NUMBER,
         timeout=30,
@@ -87,9 +114,9 @@ async def handle_dialer_voice(request: Request):
 async def get():
     return HTMLResponse(HTML_PAGE)
 
-@app.get("/tickets")
+@app.get("/tickets", dependencies=admin_only)
 async def get_tickets():
-    tickets = db.get_tickets()
+    tickets = await db.get_tickets()
     return JSONResponse({
         "total": len(tickets),
         "tickets": tickets
@@ -98,7 +125,7 @@ async def get_tickets():
 class TicketStatusUpdate(BaseModel):
     status: str  # "open" | "assigned" | "in_progress" | "completed"
 
-@app.patch("/tickets/{ticket_id}/status")
+@app.patch("/tickets/{ticket_id}/status", dependencies=admin_only)
 async def update_ticket_status(ticket_id: str, body: TicketStatusUpdate):
     """Update a ticket's status (used by the tickets drawer in the dialer page)"""
     valid_statuses = {"open", "assigned", "in_progress", "completed"}
@@ -107,12 +134,9 @@ async def update_ticket_status(ticket_id: str, body: TicketStatusUpdate):
             {"error": f"status must be one of {sorted(valid_statuses)}"},
             status_code=400
         )
-    if body.status == "completed":
-        # complete_ticket also frees the assigned worker and hands them
-        # the next open ticket, if any exist.
-        updated = db.complete_ticket(ticket_id)
-    else:
-        updated = db.update_ticket(ticket_id, {"status": body.status})
+    # Moving to completed/open frees the assigned worker (completed also hands
+    # them the next open ticket, if any exist).
+    updated = await db.set_ticket_status(ticket_id, body.status)
 
     if updated is None:
         return JSONResponse({"error": "ticket not found"}, status_code=404)
@@ -122,48 +146,57 @@ async def update_ticket_status(ticket_id: str, body: TicketStatusUpdate):
 class WorkerCreateBody(BaseModel):
     name: str
 
-@app.get("/workers")
+@app.get("/workers", dependencies=admin_only)
 async def get_workers():
-    workers = db.get_workers()
+    workers = await db.get_workers()
     return JSONResponse({"total": len(workers), "workers": workers})
 
-@app.post("/workers")
+@app.post("/workers", dependencies=admin_only)
 async def create_worker(body: WorkerCreateBody):
     if not body.name.strip():
         return JSONResponse({"error": "name is required"}, status_code=400)
-    worker = db.create_worker(WorkerCreate(name=body.name.strip()))
+    worker = await db.create_worker(WorkerCreate(name=body.name.strip()))
     if not worker:
         return JSONResponse({"error": "failed to create worker"}, status_code=500)
     return JSONResponse({"worker": worker})
 
-@app.get("/tickets/text")
+@app.get("/tickets/text", dependencies=admin_only)
 async def get_tickets_text():
-    tickets = db.get_tickets()
-    
+    tickets = await db.get_tickets()
+
+    def field(t, key, default=""):
+        # Ticket fields come from callers/the LLM, so escape them before embedding in HTML
+        return html.escape(str(t.get(key) if t.get(key) is not None else default))
+
     lines = ["=" * 60, "HOTEL TICKETS", "=" * 60]
     for i, t in enumerate(tickets, 1):
-        lines.append(f"\n{i}. Room: {t.get('room', 'N/A')}")
-        lines.append(f"   Type: {t.get('request_type', 'N/A')}")
-        lines.append(f"   Item: {t.get('item', 'N/A')}")
-        lines.append(f"   Quantity: {t.get('quantity', 1)}")
-        lines.append(f"   Priority: {t.get('priority', 'medium')}")
-        lines.append(f"   Status: {t.get('status', 'open')}")
-        lines.append(f"   Created: {t.get('created_at', 'N/A')}")
-        lines.append(f"   Description: {t.get('description', '')[:50]}...")
+        lines.append(f"\n{i}. Room: {field(t, 'room', 'N/A')}")
+        lines.append(f"   Type: {field(t, 'request_type', 'N/A')}")
+        lines.append(f"   Item: {field(t, 'item', 'N/A')}")
+        lines.append(f"   Quantity: {field(t, 'quantity', 1)}")
+        lines.append(f"   Priority: {field(t, 'priority', 'medium')}")
+        lines.append(f"   Status: {field(t, 'status', 'open')}")
+        lines.append(f"   Created: {field(t, 'created_at', 'N/A')}")
+        lines.append(f"   Description: {html.escape(str(t.get('description') or '')[:50])}...")
     lines.append("\n" + "=" * 60)
     lines.append(f"Total: {len(tickets)} tickets")
     
     return HTMLResponse("<pre>" + "\n".join(lines) + "</pre>")
 
 # --- Twilio Voice Webhook (Incoming calls) ---
-@app.post("/voice")
+@app.post("/voice", dependencies=twilio_only)
 async def handle_voice(request: Request):
-    ngrok_url = config.NGROK_URL or request.base_url.hostname
-    ws_url = f"wss://{ngrok_url}/twilio-stream" if "ngrok" in ngrok_url else f"wss://{ngrok_url}/twilio-stream"
+    ws_url = f"wss://{public_host(request)}/twilio-stream"
     
     response = VoiceResponse()
     connect = Connect()
-    connect.stream(url=ws_url)
+    stream = connect.stream(url=ws_url)
+    # Shared secret the stream handler checks on "start", so only calls set up
+    # through this (signature-checked) webhook can open /twilio-stream
+    if config.STREAM_TOKEN:
+        stream.parameter(name="token", value=config.STREAM_TOKEN)
+    else:
+        print("⚠️ STREAM_TOKEN not set - /twilio-stream will reject this call")
     response.append(connect)
     
     print(f"📞 Incoming call → Stream to: {ws_url}")
@@ -214,14 +247,25 @@ async def websocket_endpoint(websocket: WebSocket):
         import traceback
         traceback.print_exc()
 
+# --- Debug: List all routes ---
+@app.get("/routes", dependencies=admin_only)
+async def list_routes():
+    routes = []
+    for route in app.routes:
+        routes.append({
+            "path": route.path,
+            "methods": list(route.methods) if hasattr(route, 'methods') else []
+        })
+    return JSONResponse(routes)
+
 if __name__ == "__main__":
     import uvicorn
     print("=" * 60)
     print("🚀 Hotel Voice Agent")
     print("=" * 60)
     print(f"📍 Browser UI: http://localhost:{config.PORT}")
-    print(f"📞 Dialer: http://localhost:{config.PORT}/dialer")
-    print(f"📋 Tickets: http://localhost:{config.PORT}/tickets")
+    print(f"📞 Dialer: http://localhost:{config.PORT}/dialer?key=<ADMIN_API_KEY>")
+    print(f"📋 Tickets: http://localhost:{config.PORT}/tickets?key=<ADMIN_API_KEY>")
     print(f"📁 HTML path: {DIALER_HTML_PATH}")
     print("=" * 60)
     print("\nTo enable phone calls:")
@@ -231,14 +275,3 @@ if __name__ == "__main__":
     print("=" * 60)
     
     uvicorn.run(app, host="0.0.0.0", port=config.PORT)
-
-# --- Debug: List all routes ---
-@app.get("/routes")
-async def list_routes():
-    routes = []
-    for route in app.routes:
-        routes.append({
-            "path": route.path,
-            "methods": list(route.methods) if hasattr(route, 'methods') else []
-        })
-    return JSONResponse(routes)

@@ -6,3 +6,5 @@ __pycache__/
 *.egg-info/
 .DS_Store
 node_modules/
+*.raw
+.pytest_cache/
